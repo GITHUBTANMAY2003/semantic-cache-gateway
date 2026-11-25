@@ -1,6 +1,7 @@
 """Shared test fixtures and helpers: a fake upstream (respx), a client that calls our app in
-memory, a fake clock and a fake embedder. Tests need neither Ollama, a server nor the real model."""
+memory, a fake clock and fake embedders. Tests need neither Ollama, a server nor the real model."""
 
+import hashlib
 import math
 
 import httpx
@@ -33,11 +34,25 @@ class FakeEmbedder:
 
     def __init__(self, vectors: dict[str, np.ndarray]):
         self.vectors = vectors
+        self.calls: list[str] = []  # every text passed to embed, so tests can check when embedding happens
 
     def embed(self, text: str) -> np.ndarray:
+        self.calls.append(text)
         if text not in self.vectors:
             raise KeyError(f"FakeEmbedder has no vector for {text!r}")
         return self.vectors[text]
+
+
+class HashEmbedder:
+    """Same text gives the same vector; different texts give nearly unrelated vectors
+    (random 384-d unit vectors have dot products near 0). So general tests never get
+    accidental semantic hits and never load the real model."""
+
+    def embed(self, text: str) -> np.ndarray:
+        seed = int(hashlib.sha256(text.encode()).hexdigest()[:16], 16)
+        rng = np.random.default_rng(seed)
+        v = rng.standard_normal(EMBED_DIM)
+        return (v / np.linalg.norm(v)).astype(np.float32)
 
 
 class FakeClock:
@@ -74,7 +89,7 @@ def upstream():
 @pytest.fixture
 async def client(settings):
     async with httpx.AsyncClient() as upstream_client:
-        app = create_app(settings, http_client=upstream_client)
+        app = create_app(settings, http_client=upstream_client, embedder=HashEmbedder())
         # ASGITransport hands requests straight to the app, without opening a network port.
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as test_client:

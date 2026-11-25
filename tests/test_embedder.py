@@ -3,7 +3,7 @@ the test helpers (vector_at, FakeEmbedder) that later tests rely on instead of t
 
 import numpy as np
 import pytest
-from conftest import BASE, FakeEmbedder, vector_at
+from conftest import BASE, FakeEmbedder, HashEmbedder, vector_at
 
 from gateway.config import Settings
 
@@ -54,3 +54,16 @@ def test_fake_embedder_unknown_text_raises():
     fake = FakeEmbedder({"hello": BASE})
     with pytest.raises(KeyError, match="goodbye"):
         fake.embed("goodbye")
+
+
+def test_hash_embedder_same_text_same_vector():
+    assert np.array_equal(HashEmbedder().embed("hello"), HashEmbedder().embed("hello"))
+
+
+def test_hash_embedder_unit_norm():
+    assert np.linalg.norm(HashEmbedder().embed("hello")) == pytest.approx(1.0)
+
+
+def test_hash_embedder_different_texts_unrelated():
+    emb = HashEmbedder()
+    assert emb.embed("How do I reset my password?") @ emb.embed("password reset steps") < 0.5

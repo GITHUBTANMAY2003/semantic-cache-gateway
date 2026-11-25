@@ -1,6 +1,7 @@
 """The FastAPI app: OpenAI-compatible routes in front of the upstream LLM.
-Apps use the gateway by changing only their base_url. Chat requests that pass the skip
-rules are answered from the exact cache when possible, otherwise forwarded and stored."""
+Apps use the gateway by changing only their base_url. A chat request is checked in this order:
+skip rules (bypass), exact cache, semantic cache (nearest stored prompt in the same context),
+and only then the upstream, whose complete answers are stored for later requests."""
 
 import asyncio
 import time
@@ -8,11 +9,10 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import httpx
-import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from gateway.cache import EMBED_DIM, CacheEntry, CacheStore, MemoryStore
+from gateway.cache import CacheEntry, CacheStore, MemoryStore
 from gateway.config import Settings
 from gateway.keys import context_key, exact_key, last_user_text
 from gateway.rules import bypass_reason
@@ -27,12 +27,18 @@ def create_app(
     settings: Settings | None = None,
     http_client: httpx.AsyncClient | None = None,
     store: CacheStore | None = None,
+    embedder=None,
 ) -> FastAPI:
     settings = settings or Settings()
 
     # Code before "yield" runs at server startup, code after it at shutdown.
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if app.state.embedder is None:
+            # Imported here so tests, which always pass an embedder, never import torch.
+            from gateway.embedder import Embedder
+
+            app.state.embedder = Embedder(settings.embed_model)  # ~2 s, once at startup
         if http_client is not None:
             # Passed in by the caller (tests), so the caller also closes it.
             yield
@@ -45,6 +51,7 @@ def create_app(
     app = FastAPI(lifespan=lifespan)
     app.state.http_client = http_client
     app.state.store = store if store is not None else MemoryStore()
+    app.state.embedder = embedder
 
     # These handlers cover every route. Timeouts are a subclass of RequestError;
     # FastAPI picks the most specific handler, so they get 504 and the rest get 502.
@@ -64,6 +71,7 @@ def create_app(
     async def chat_completions(body: dict, request: Request):
         client = app.state.http_client
         store = app.state.store
+        embedder = app.state.embedder
         reason = bypass_reason(body, request.headers, settings.max_cache_temperature)
 
         # A stream request always has a bypass reason ("stream"), so it is never cached.
@@ -94,6 +102,16 @@ def create_app(
         if entry is not None:
             return JSONResponse(content=entry.response, headers={"X-Cache": "HIT-EXACT"})
 
+        # Embedding is CPU work (~10-30 ms), so it runs off the event loop like the store calls.
+        vector = await asyncio.to_thread(embedder.embed, text)
+        # nearest only searches entries with the same ctx, so it never crosses models or system prompts.
+        found = await asyncio.to_thread(store.nearest, ctx, vector)
+        if found is not None:
+            entry, similarity = found
+            if similarity >= settings.tau_high:
+                headers = {"X-Cache": "HIT-SEMANTIC", "X-Cache-Similarity": f"{similarity:.4f}"}
+                return JSONResponse(content=entry.response, headers=headers)
+
         status, data, elapsed_ms = await forward_chat(client, settings, body)
 
         # Store only complete answers. Read the body defensively: a strange upstream reply must not crash us.
@@ -106,8 +124,7 @@ def create_app(
                 ctx=ctx,
                 prompt=text,
                 response=data,
-                # Placeholder until Task 6 adds embeddings; the exact cache does not use it.
-                vector=np.zeros(EMBED_DIM, dtype=np.float32),
+                vector=vector,
                 upstream_ms=elapsed_ms,
                 completion_tokens=usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0,
                 created_at=time.time(),

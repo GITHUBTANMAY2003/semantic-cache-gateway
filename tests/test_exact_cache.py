@@ -2,6 +2,7 @@
 
 import httpx
 import pytest
+from conftest import HashEmbedder
 
 from gateway.cache import MemoryStore
 from gateway.keys import context_key, exact_key
@@ -39,7 +40,7 @@ def store(clock):
 async def client(settings, store):
     # Same as conftest's client, but with a store the tests can look inside.
     async with httpx.AsyncClient() as upstream_client:
-        app = create_app(settings, http_client=upstream_client, store=store)
+        app = create_app(settings, http_client=upstream_client, store=store, embedder=HashEmbedder())
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as test_client:
             yield test_client
