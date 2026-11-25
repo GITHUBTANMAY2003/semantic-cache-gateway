@@ -11,3 +11,5 @@ class Settings(BaseSettings):
     upstream_base_url: str = "http://localhost:11434/v1"
     upstream_api_key: str = ""
     upstream_timeout_seconds: float = 120.0
+    # Above this temperature the caller wants variety, so a stored answer would be wrong.
+    max_cache_temperature: float = 0.3

@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from gateway.config import Settings
+from gateway.rules import bypass_reason
 from gateway.upstream import UpstreamBadResponse, forward_chat, forward_models, open_stream, relay_stream
 
 
@@ -48,8 +49,10 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
         return error_response(502, "upstream_bad_response", "The upstream LLM server sent a reply that is not valid JSON.")
 
     @app.post("/v1/chat/completions")
-    async def chat_completions(body: dict):
+    async def chat_completions(body: dict, request: Request):
         client = app.state.http_client
+        reason = bypass_reason(body, request.headers, settings.max_cache_temperature)
+        headers = {"X-Cache": "BYPASS"} if reason is not None else {}
 
         if body.get("stream"):
             # Opened before replying, so we know the upstream status before sending ours.
@@ -62,10 +65,11 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
                 relay_stream(upstream_response),
                 status_code=upstream_response.status_code,
                 media_type=media_type,
+                headers=headers,
             )
 
         status, data, _elapsed_ms = await forward_chat(client, settings, body)
-        return JSONResponse(status_code=status, content=data)
+        return JSONResponse(status_code=status, content=data, headers=headers)
 
     @app.get("/v1/models")
     async def models():

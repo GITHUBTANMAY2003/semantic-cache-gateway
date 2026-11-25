@@ -25,7 +25,7 @@
 
 ## Review Focus
 
-1. **Upstream down / timeout / non-200** → client gets upstream's status and body (or 502 with a JSON error on connection failure); nothing stored. Test in Task 1.
+1. **Upstream down / timeout / non-200** → client gets upstream's status and body (or 502 with a JSON error on connection failure); a non-JSON upstream reply becomes 502 (upstream status is passed through only when the body is JSON); nothing stored. Test in Task 1.
 2. **Redis unreachable or erroring** mid-request → request still answered via upstream with `X-Cache: BYPASS`. Test in Task 8.
 3. **No usable last user message** (only system message, last message is assistant, empty/whitespace text, or `content` is a list of parts) → bypass, no crash. Test in Task 3.
 4. **Exact key present but its entry already expired** → treated as a miss, not a crash or stale hit. Test in Task 4.

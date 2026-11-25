@@ -131,3 +131,27 @@ async def test_models_non_json_gives_502(client, upstream):
     r = await client.get("/v1/models")
     assert r.status_code == 502
     assert r.json()["error"]["type"] == "upstream_bad_response"
+
+
+# --- Task 3: skip rules mark bypassed requests ---
+
+
+async def test_bypass_header_set(client, upstream):
+    upstream.post("/chat/completions").respond(200, json=RESPONSE)
+    r = await client.post("/v1/chat/completions", json={**REQUEST, "temperature": 0.9})
+    assert r.status_code == 200
+    assert r.headers["x-cache"] == "BYPASS"
+
+
+async def test_stream_bypass_header_set(client, upstream):
+    upstream.post("/chat/completions").respond(200, content=SSE_BYTES)
+    r = await client.post("/v1/chat/completions", json={**REQUEST, "stream": True})
+    assert r.status_code == 200
+    assert r.headers["x-cache"] == "BYPASS"
+
+
+async def test_cacheable_request_has_no_cache_header_yet(client, upstream):
+    upstream.post("/chat/completions").respond(200, json=RESPONSE)
+    r = await client.post("/v1/chat/completions", json=REQUEST)
+    assert r.status_code == 200
+    assert "x-cache" not in r.headers
