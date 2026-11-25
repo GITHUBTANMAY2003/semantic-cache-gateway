@@ -105,7 +105,9 @@ async def test_authorization_sent_only_when_key_set(client, upstream, settings):
     assert "authorization" not in route.calls.last.request.headers
 
     settings.upstream_api_key = "test-key"  # the app holds this same settings object
-    await client.post("/v1/chat/completions", json=REQUEST)
+    # Different wording: an identical request would be served from the cache and never reach the upstream.
+    second = {**REQUEST, "messages": [{"role": "user", "content": "How do I change my email address?"}]}
+    await client.post("/v1/chat/completions", json=second)
     assert route.calls.last.request.headers["authorization"] == "Bearer test-key"
 
 
@@ -150,8 +152,8 @@ async def test_stream_bypass_header_set(client, upstream):
     assert r.headers["x-cache"] == "BYPASS"
 
 
-async def test_cacheable_request_has_no_cache_header_yet(client, upstream):
+async def test_cacheable_request_gets_miss(client, upstream):
     upstream.post("/chat/completions").respond(200, json=RESPONSE)
     r = await client.post("/v1/chat/completions", json=REQUEST)
     assert r.status_code == 200
-    assert "x-cache" not in r.headers
+    assert r.headers["x-cache"] == "MISS"

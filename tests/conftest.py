@@ -12,6 +12,24 @@ from gateway.main import create_app
 UPSTREAM_URL = "http://upstream.test/v1"
 
 
+class FakeClock:
+    """A clock tests can move forward, so TTL tests never sleep."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()
+
+
 @pytest.fixture
 def settings():
     # _env_file=None and explicit values: your local .env cannot change test results.

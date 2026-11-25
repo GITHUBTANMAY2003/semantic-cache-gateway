@@ -1,13 +1,20 @@
-"""The FastAPI app: OpenAI-compatible routes that pass requests through to the upstream LLM.
-Apps use the gateway by changing only their base_url; caching will be added here later."""
+"""The FastAPI app: OpenAI-compatible routes in front of the upstream LLM.
+Apps use the gateway by changing only their base_url. Chat requests that pass the skip
+rules are answered from the exact cache when possible, otherwise forwarded and stored."""
 
+import asyncio
+import time
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 import httpx
+import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from gateway.cache import EMBED_DIM, CacheEntry, CacheStore, MemoryStore
 from gateway.config import Settings
+from gateway.keys import context_key, exact_key, last_user_text
 from gateway.rules import bypass_reason
 from gateway.upstream import UpstreamBadResponse, forward_chat, forward_models, open_stream, relay_stream
 
@@ -16,7 +23,11 @@ def error_response(status: int, error_type: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": {"message": message, "type": error_type}})
 
 
-def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    http_client: httpx.AsyncClient | None = None,
+    store: CacheStore | None = None,
+) -> FastAPI:
     settings = settings or Settings()
 
     # Code before "yield" runs at server startup, code after it at shutdown.
@@ -33,6 +44,7 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
 
     app = FastAPI(lifespan=lifespan)
     app.state.http_client = http_client
+    app.state.store = store if store is not None else MemoryStore()
 
     # These handlers cover every route. Timeouts are a subclass of RequestError;
     # FastAPI picks the most specific handler, so they get 504 and the rest get 502.
@@ -51,9 +63,10 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
     @app.post("/v1/chat/completions")
     async def chat_completions(body: dict, request: Request):
         client = app.state.http_client
+        store = app.state.store
         reason = bypass_reason(body, request.headers, settings.max_cache_temperature)
-        headers = {"X-Cache": "BYPASS"} if reason is not None else {}
 
+        # A stream request always has a bypass reason ("stream"), so it is never cached.
         if body.get("stream"):
             # Opened before replying, so we know the upstream status before sending ours.
             upstream_response = await open_stream(client, settings, body)
@@ -65,11 +78,44 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
                 relay_stream(upstream_response),
                 status_code=upstream_response.status_code,
                 media_type=media_type,
-                headers=headers,
+                headers={"X-Cache": "BYPASS"},
             )
 
-        status, data, _elapsed_ms = await forward_chat(client, settings, body)
-        return JSONResponse(status_code=status, content=data, headers=headers)
+        if reason is not None:
+            status, data, _elapsed_ms = await forward_chat(client, settings, body)
+            return JSONResponse(status_code=status, content=data, headers={"X-Cache": "BYPASS"})
+
+        # No bypass reason means last_user_text is not None, so context_key cannot raise.
+        text = last_user_text(body)
+        ctx = context_key(body)
+        key = exact_key(ctx, text)
+
+        entry = await asyncio.to_thread(store.get_exact, key)
+        if entry is not None:
+            return JSONResponse(content=entry.response, headers={"X-Cache": "HIT-EXACT"})
+
+        status, data, elapsed_ms = await forward_chat(client, settings, body)
+
+        # Store only complete answers. Read the body defensively: a strange upstream reply must not crash us.
+        choices = data.get("choices") if isinstance(data, dict) else None
+        first = choices[0] if isinstance(choices, list) and choices else None
+        if status == 200 and isinstance(first, dict) and first.get("finish_reason") == "stop":
+            usage = data.get("usage")
+            entry = CacheEntry(
+                id=uuid4().hex,
+                ctx=ctx,
+                prompt=text,
+                response=data,
+                # Placeholder until Task 6 adds embeddings; the exact cache does not use it.
+                vector=np.zeros(EMBED_DIM, dtype=np.float32),
+                upstream_ms=elapsed_ms,
+                completion_tokens=usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0,
+                created_at=time.time(),
+            )
+            await asyncio.to_thread(store.put, entry, key, settings.cache_ttl_seconds)
+
+        # A miss whether or not it was stored.
+        return JSONResponse(status_code=status, content=data, headers={"X-Cache": "MISS"})
 
     @app.get("/v1/models")
     async def models():

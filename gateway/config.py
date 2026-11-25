@@ -13,3 +13,5 @@ class Settings(BaseSettings):
     upstream_timeout_seconds: float = 120.0
     # Above this temperature the caller wants variety, so a stored answer would be wrong.
     max_cache_temperature: float = 0.3
+    # 24 h: answers can go stale, so entries expire.
+    cache_ttl_seconds: int = 86400
