@@ -9,6 +9,18 @@ import httpx
 from gateway.config import Settings
 
 
+class UpstreamBadResponse(Exception):
+    """The upstream replied, but the body was not valid JSON."""
+
+
+def _json(response: httpx.Response) -> dict:
+    # A proxy in front of the LLM can answer with an HTML error page instead of JSON.
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise UpstreamBadResponse() from exc
+
+
 def _headers(settings: Settings) -> dict:
     # Ollama needs no key. An empty "Bearer " header would be invalid, so send nothing.
     if settings.upstream_api_key:
@@ -23,12 +35,12 @@ async def forward_chat(client: httpx.AsyncClient, settings: Settings, body: dict
         f"{settings.upstream_base_url}/chat/completions", json=body, headers=_headers(settings)
     )
     elapsed_ms = (time.perf_counter() - start) * 1000
-    return response.status_code, response.json(), elapsed_ms
+    return response.status_code, _json(response), elapsed_ms
 
 
 async def forward_models(client: httpx.AsyncClient, settings: Settings) -> tuple[int, dict]:
     response = await client.get(f"{settings.upstream_base_url}/models", headers=_headers(settings))
-    return response.status_code, response.json()
+    return response.status_code, _json(response)
 
 
 async def open_stream(client: httpx.AsyncClient, settings: Settings, body: dict) -> httpx.Response:

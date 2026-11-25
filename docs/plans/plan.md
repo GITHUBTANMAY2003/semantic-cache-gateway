@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11, FastAPI, uvicorn, httpx, sentence-transformers, numpy, redis-py + Redis Stack, pydantic-settings, pytest, pytest-asyncio, respx, matplotlib, docker-compose.
 
-**Spec:** `docs/superpowers/specs/2026-11-25-semantic-cache-gateway-design.md`
+**Spec:** `docs/specs/design.md`
 
 ## Global Constraints
 

@@ -107,3 +107,27 @@ async def test_authorization_sent_only_when_key_set(client, upstream, settings):
     settings.upstream_api_key = "test-key"  # the app holds this same settings object
     await client.post("/v1/chat/completions", json=REQUEST)
     assert route.calls.last.request.headers["authorization"] == "Bearer test-key"
+
+
+# --- Task 2, Part A: upstream replies that are not JSON ---
+
+
+async def test_non_json_upstream_reply_gives_502(client, upstream):
+    upstream.post("/chat/completions").respond(200, text="<html>oops</html>")
+    r = await client.post("/v1/chat/completions", json=REQUEST)
+    assert r.status_code == 502
+    assert r.json()["error"]["type"] == "upstream_bad_response"
+
+
+async def test_non_json_upstream_error_gives_502(client, upstream):
+    upstream.post("/chat/completions").respond(500, text="Internal Server Error")
+    r = await client.post("/v1/chat/completions", json=REQUEST)
+    assert r.status_code == 502
+    assert r.json()["error"]["type"] == "upstream_bad_response"
+
+
+async def test_models_non_json_gives_502(client, upstream):
+    upstream.get("/models").respond(200, text="not json")
+    r = await client.get("/v1/models")
+    assert r.status_code == 502
+    assert r.json()["error"]["type"] == "upstream_bad_response"

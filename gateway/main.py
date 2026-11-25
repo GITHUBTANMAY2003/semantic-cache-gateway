@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from gateway.config import Settings
-from gateway.upstream import forward_chat, forward_models, open_stream, relay_stream
+from gateway.upstream import UpstreamBadResponse, forward_chat, forward_models, open_stream, relay_stream
 
 
 def error_response(status: int, error_type: str, message: str) -> JSONResponse:
@@ -42,6 +42,10 @@ def create_app(settings: Settings | None = None, http_client: httpx.AsyncClient 
     @app.exception_handler(httpx.RequestError)
     async def upstream_unreachable(request: Request, exc: httpx.RequestError):
         return error_response(502, "upstream_unreachable", "Could not get a response from the upstream LLM server.")
+
+    @app.exception_handler(UpstreamBadResponse)
+    async def upstream_bad_response(request: Request, exc: UpstreamBadResponse):
+        return error_response(502, "upstream_bad_response", "The upstream LLM server sent a reply that is not valid JSON.")
 
     @app.post("/v1/chat/completions")
     async def chat_completions(body: dict):
