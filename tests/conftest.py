@@ -1,15 +1,43 @@
-"""Shared test fixtures: a fake upstream (respx) and a client that calls our app in memory.
-Tests need neither Ollama nor a running server."""
+"""Shared test fixtures and helpers: a fake upstream (respx), a client that calls our app in
+memory, a fake clock and a fake embedder. Tests need neither Ollama, a server nor the real model."""
+
+import math
 
 import httpx
+import numpy as np
 import pytest
 import respx
 
+from gateway.cache import EMBED_DIM
 from gateway.config import Settings
 from gateway.main import create_app
 
 # A made-up host, so a missing mock can never reach a real LLM server.
 UPSTREAM_URL = "http://upstream.test/v1"
+
+BASE = np.zeros(EMBED_DIM, dtype=np.float32)
+BASE[0] = 1.0
+
+
+def vector_at(similarity: float) -> np.ndarray:
+    """A unit vector whose dot product with BASE is exactly `similarity`,
+    so tests can control similarity precisely."""
+    vector = np.zeros(EMBED_DIM, dtype=np.float32)
+    vector[0] = similarity
+    vector[1] = math.sqrt(1 - similarity**2)
+    return vector
+
+
+class FakeEmbedder:
+    """Has the same embed method as Embedder, so tests never load the real model."""
+
+    def __init__(self, vectors: dict[str, np.ndarray]):
+        self.vectors = vectors
+
+    def embed(self, text: str) -> np.ndarray:
+        if text not in self.vectors:
+            raise KeyError(f"FakeEmbedder has no vector for {text!r}")
+        return self.vectors[text]
 
 
 class FakeClock:

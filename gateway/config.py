@@ -15,3 +15,5 @@ class Settings(BaseSettings):
     max_cache_temperature: float = 0.3
     # 24 h: answers can go stale, so entries expire.
     cache_ttl_seconds: int = 86400
+    # 384-d vectors, small enough to run on CPU.
+    embed_model: str = "BAAI/bge-small-en-v1.5"
