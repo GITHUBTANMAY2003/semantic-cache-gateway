@@ -1,0 +1,5 @@
+-r requirements.txt
+jupyter
+pytest
+pytest-asyncio
+respx

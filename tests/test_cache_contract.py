@@ -1,17 +1,47 @@
 """Contract tests: every CacheStore must pass these, whatever it stores its data in.
-The store fixture runs each test once per store class (MemoryStore now; Task 8 adds RedisStore)."""
+The fixture runs each test once per store: MemoryStore and RedisStore."""
+
+import time
 
 import numpy as np
 import pytest
+import redis
+from conftest import FakeClock
 
 from gateway.cache import EMBED_DIM, CacheEntry, MemoryStore
+from gateway.redis_store import RedisStore
 
-STORE_FACTORIES = [MemoryStore]
+
+def memory_store(settings):
+    clock = FakeClock()
+    return MemoryStore(clock=clock), clock.advance
 
 
-@pytest.fixture(params=STORE_FACTORIES)
-def store(request, clock):
-    return request.param(clock=clock)
+def redis_store(settings):
+    try:
+        redis.Redis.from_url(settings.redis_url).ping()
+    except redis.ConnectionError:
+        pytest.skip("Redis not running: docker compose up -d redis")
+    # Own index and key prefix, so tests never touch the gateway's real data.
+    store = RedisStore(settings.redis_url, index="test_cache_idx", prefix="test:")
+    store.clear()
+    # Redis expires keys on its own clock, so the only way to move time forward is to wait.
+    return store, time.sleep
+
+
+STORE_FACTORIES = [memory_store, redis_store]
+
+
+@pytest.fixture(params=STORE_FACTORIES, ids=["memory", "redis"])
+def store_and_advance(request, settings):
+    """(store, advance): advance(seconds) moves the store's time forward."""
+    return request.param(settings)
+
+
+@pytest.fixture
+def store(store_and_advance):
+    # Most tests do not need to move time.
+    return store_and_advance[0]
 
 
 def unit_vector(index):
@@ -45,19 +75,17 @@ def test_missing_exact_is_none(store):
     assert store.get_exact("nope") is None
 
 
-def test_expired_entry_is_miss(store, clock):
+@pytest.mark.slow  # the Redis variant sleeps ~2.5 s
+def test_entry_lives_until_ttl_then_misses(store_and_advance):
+    store, advance = store_and_advance
     entry = make_entry()
-    store.put(entry, "k", 10)
-    clock.advance(11)
+    store.put(entry, "k", 2)
+    advance(1)
+    assert store.get_exact("k") is not None
+    advance(1.5)
     assert store.get_exact("k") is None
     assert store.nearest(entry.ctx, entry.vector) is None
     assert store.count() == 0
-
-
-def test_entry_alive_before_ttl(store, clock):
-    store.put(make_entry(), "k", 10)
-    clock.advance(9)
-    assert store.get_exact("k") is not None
 
 
 def test_nearest_picks_most_similar_in_same_ctx(store):
@@ -83,3 +111,11 @@ def test_clear_and_count(store):
     store.clear()
     assert store.count() == 0
     assert store.get_exact("k1") is None
+
+
+def test_redis_data_outlives_the_python_object(settings):
+    store, _advance = redis_store(settings)
+    store.put(make_entry(), "k", 60)
+    # A new object with the same url, index and prefix: the data lives in Redis, not in Python.
+    again = RedisStore(settings.redis_url, index="test_cache_idx", prefix="test:")
+    assert again.get_exact("k").id == "e1"

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import respx
 
-from gateway.cache import EMBED_DIM
+from gateway.cache import EMBED_DIM, MemoryStore
 from gateway.config import Settings
 from gateway.main import create_app
 
@@ -89,7 +89,8 @@ def upstream():
 @pytest.fixture
 async def client(settings):
     async with httpx.AsyncClient() as upstream_client:
-        app = create_app(settings, http_client=upstream_client, embedder=HashEmbedder())
+        # Store and embedder passed in: the lifespan, which would create the real ones, does not run here.
+        app = create_app(settings, http_client=upstream_client, store=MemoryStore(), embedder=HashEmbedder())
         # ASGITransport hands requests straight to the app, without opening a network port.
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as test_client:

@@ -1,0 +1,17 @@
+services:
+  redis:
+    image: redis/redis-stack-server:latest
+    ports:
+      - "6379:6379"
+
+  gateway:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    environment:
+      # Ollama runs on the Mac, not in Docker; host.docker.internal is the Mac from inside a container.
+      - UPSTREAM_BASE_URL=http://host.docker.internal:11434/v1
+      # Inside compose, the service name is the hostname.
+      - REDIS_URL=redis://redis:6379

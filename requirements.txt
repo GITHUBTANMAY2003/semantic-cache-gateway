@@ -1,10 +1,7 @@
 sentence-transformers
 numpy
 httpx
-jupyter
 fastapi
 uvicorn
 pydantic-settings
-pytest
-pytest-asyncio
-respx
+redis

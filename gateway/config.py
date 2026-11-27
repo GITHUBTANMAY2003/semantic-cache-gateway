@@ -19,3 +19,8 @@ class Settings(BaseSettings):
     tau_high: float = 0.98
     # 384-d vectors, small enough to run on CPU.
     embed_model: str = "BAAI/bge-small-en-v1.5"
+    redis_url: str = "redis://localhost:6379"
+    # "redis" or "memory"; memory needs no Docker.
+    cache_backend: str = "redis"
+    # Empty means the admin endpoint is disabled.
+    admin_token: str = ""
